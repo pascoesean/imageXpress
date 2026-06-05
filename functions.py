@@ -57,7 +57,7 @@ def get_cellpose_model(use_gpu):
 
 
 def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
-                      nuclear_channel, diameter, use_gpu, dilation_iterations=5,
+                      nuclear_channel, diameter, use_gpu, dilation_iterations=10,
                       scale=1, save_masks=True, model=None):
 
     t_total = time.time()
@@ -75,7 +75,6 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     print(f'Segmenting nuclei for {well_id} (scale={scale})...', flush=True)
     print(f'  GPU memory before eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
 
-    nuclear_stack_ds = nuclear_stack
     nuclear_stack_ds = downscale_local_mean(nuclear_stack, (1, scale, scale)).astype(np.float32)
     print(f'  downsampled stack shape: {nuclear_stack_ds.shape}', flush=True)
 
@@ -247,7 +246,7 @@ def _measure_channel(stack, mask, nucleus_ids):
 
 
 
-def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, kd_radius=50):
+def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     """
     Helper function. Calculates morphology metrics in a single pass (groups by label).
     """
@@ -266,24 +265,37 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, kd_radius=50):
     prop_by_label = {p.label: p for p in props}
 
     centroids = np.array([prop_by_label[i].centroid for i in nucleus_ids])
-    df[["centroid_x", "centroid_y", "centroid_z"]] = centroids
+    df[["centroid_z_um", "centroid_y_um", "centroid_x_um"]] = centroids
 
-    centroids_um = centroids * voxel_volume_um3 # voxels --> um^3
-    kdtree = KDTree(centroids_um)
-    kdtree.count_neighbors(kdtree, kd_radius)
-
-    df['area'] = np.array([prop_by_label[i].area for i in nucleus_ids])
     df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length for i in nucleus_ids])
     df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length for i in nucleus_ids])
 
     _elapsed(t_total, 'regionprops measurements')
+
+    t = time.time()
+    # use a kd-tree to calculate local density metrics
+    kdtree = KDTree(centroids)
+
+    # query tree for info on 5 nearest neighbors
+    neighbor_dists, neighbor_idx = kdtree.query(centroids, k=5)
+
+    # note: the 0th item in each list is a self-node --> start indexing at 1
+    df['nn_dist'] = neighbor_dists[:, 1]
+    df['nn_nucleus_id'] = nucleus_ids[neighbor_idx[:, 1]]
+    df['nn5_mean_dist'] = neighbor_dists[:, 1:].mean(axis=1)
+
+    # query tree for # neighbors within radius
+    neighbor_idx = kdtree.query_ball_point(centroids, radius_um)
+    df[f'num_neighbors_within_{int(radius_um)}_um'] = [len(nb) - 1 for nb in neighbor_idx]
+
+    _elapsed(t, 'local density measurements')
 
     # run marching cubes algorithm to generate 3D model of each nucleus
     sphericities = []
     t = time.time()
 
     for nid in nucleus_ids:
-        # first, reduce the searching space to the nucleus' bounding box (from regionprops)
+        # first, reduce the search space to the nucleus' bounding box (from regionprops)
         p = prop_by_label[nid]
         slices = p.slice
 
@@ -297,7 +309,7 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, kd_radius=50):
             surface_area = mesh_surface_area(verts, faces)
             # note: num_pixels property is equivalent to num_voxels for 3D images
             volume = p.num_pixels * voxel_volume_um3
-            # calculate sphericity (how close is surface area to sphere?)
+            # calculate sphericity (how close is surface area of the 3D object to the surface area of a sphere?)
             sphericity = (np.pi ** (1/3) * (6 * volume) ** (2/3)) / surface_area
         except Exception:
             # marching_cubes can fail for very small/irregular volumes

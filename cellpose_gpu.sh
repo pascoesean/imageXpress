@@ -10,10 +10,9 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-#BASE_PATH="/home/jdweiss1/orcd/scratch/15/test"
 BASE_PATH=$1
 
 module load miniforge
 mamba activate cellpose2
 
-python3 -u process_3dimages.py "$BASE_PATH" --use_gpu
+python3 -u process_3dimages.py "$BASE_PATH" cellpose --use_gpu

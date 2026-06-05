@@ -9,7 +9,7 @@ from functions import segment_nuclei_3d, calculate_metrics, get_cellpose_model
 
 # --- Parameters ---
 BASE_PATH = Path(sys.argv[1])
-SCALE = 2
+SCALE = 1
 N_CHANNELS = 5
 Z_STEP_UM = 5.0
 XY_PIXEL_UM = 0.6793
