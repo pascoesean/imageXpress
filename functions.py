@@ -6,7 +6,9 @@ import time
 import gc
 import torch
 from scipy import ndimage
-from scipy.ndimage import grey_dilation
+from scipy.ndimage import binary_dilation
+from scipy.spatial import KDTree
+from skimage.measure import regionprops, marching_cubes, mesh_surface_area
 from skimage.transform import downscale_local_mean, resize
 import pandas as pd
 import matplotlib
@@ -73,6 +75,7 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     print(f'Segmenting nuclei for {well_id} (scale={scale})...', flush=True)
     print(f'  GPU memory before eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
 
+    nuclear_stack_ds = nuclear_stack
     nuclear_stack_ds = downscale_local_mean(nuclear_stack, (1, scale, scale)).astype(np.float32)
     print(f'  downsampled stack shape: {nuclear_stack_ds.shape}', flush=True)
 
@@ -82,9 +85,10 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
         anisotropy=z_step_um / (xy_pixel_um * scale),
         diameter=diameter / scale,
         cellprob_threshold=2.0,
-        channels=[0, 0],  # grayscale
+        channels=[0,0], # grayscale
         z_axis=0,
     )
+
     print(f'  estimated diameter by model: {diams:.1f}px', flush=True)
     print(f'  GPU memory after eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
 
@@ -105,24 +109,46 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     # --- Build cytoplasm masks by single-pass dilation ---
     print(f'Building cytoplasm masks for {well_id}...', flush=True)
     t = time.time()
+    foreground = nuclear_masks > 0
     struct = np.ones((1, dilation_iterations * 2 + 1, dilation_iterations * 2 + 1), dtype=bool)
-    dilated = grey_dilation(nuclear_masks, footprint=struct)
+    dilated_fg = binary_dilation(foreground, structure=struct)
+
+    # propagate nearest nucleus label onto the dilated ring
+    nearest_label_idx = ndimage.distance_transform_edt(
+        ~foreground, return_distances=False, return_indices=True
+    )
+    dilated_labels = nuclear_masks[tuple(nearest_label_idx)]
+
+    # generate cytoplasm masks
     cytoplasm_masks = np.where(
-        (nuclear_masks == 0) & (dilated != 0),
-        dilated,
+        dilated_fg & ~foreground,
+        dilated_labels,
         0,
     ).astype(nuclear_masks.dtype)
+
     _elapsed(t, 'cytoplasm dilation')
 
     # --- Save masks ---
     if save_masks:
         t = time.time()
-        tifffile.imwrite(f'{base_path}/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
-        tifffile.imwrite(f'{base_path}/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
         _elapsed(t, 'saving masks')
 
     _elapsed(t_total, 'TOTAL segment_nuclei_3d')
     return nuclear_masks, cytoplasm_masks
+
+
+
+def calculate_metrics(nuclear_masks, cytoplasm_masks, base_path, n_channels,
+                      well_id, z_step_um, xy_pixel_um):
+
+    intensity_df = measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels, well_id, z_step_um, xy_pixel_um)
+    morpho_df = measure_morphology(nuclear_masks, well_id, z_step_um, xy_pixel_um)
+    df = intensity_df.merge(morpho_df, on='nucleus_id')
+
+    return df
+
 
 
 def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
@@ -147,6 +173,10 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
     df['cytoplasm_volume_um3'] = df['cytoplasm_volume_voxels'] * voxel_volume_um3
     _elapsed(t, 'volume measurements')
 
+    # save vals to prevent repeatedly calculating in loop
+    nuc_vols = df['nuclear_volume_voxels'].to_numpy()
+    cyt_vols = df['cytoplasm_volume_voxels'].to_numpy()
+
     # --- Intensity measurements per channel ---
     t = time.time()
     for channel_idx in range(1, n_channels + 1):
@@ -154,18 +184,22 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
         stack = load_channel_stack(base_path, well_id, channel_idx, dtype=np.uint16)
         print(f'  loaded {channel_name} with shape {stack.shape}', flush=True)
 
-        df[f'{channel_name}_nuclear_mean']         = ndimage.mean(stack, labels=nuclear_masks, index=nucleus_ids)
-        df[f'{channel_name}_nuclear_max']          = ndimage.maximum(stack, labels=nuclear_masks, index=nucleus_ids)
-        df[f'{channel_name}_nuclear_std']          = ndimage.standard_deviation(stack, labels=nuclear_masks, index=nucleus_ids)
-        df[f'{channel_name}_nuclear_integrated']   = df[f'{channel_name}_nuclear_mean'] * df['nuclear_volume_voxels']
+        # call helper function to efficiently get all stats
+        nuc_mean, nuc_max, nuc_std = _measure_channel(stack, nuclear_masks, nucleus_ids)
+        cyt_mean, cyt_max, cyt_std = _measure_channel(stack, cytoplasm_masks, nucleus_ids)
 
-        df[f'{channel_name}_cytoplasm_mean']       = ndimage.mean(stack, labels=cytoplasm_masks, index=nucleus_ids)
-        df[f'{channel_name}_cytoplasm_max']        = ndimage.maximum(stack, labels=cytoplasm_masks, index=nucleus_ids)
-        df[f'{channel_name}_cytoplasm_std']        = ndimage.standard_deviation(stack, labels=cytoplasm_masks, index=nucleus_ids)
-        df[f'{channel_name}_cytoplasm_integrated'] = df[f'{channel_name}_cytoplasm_mean'] * df['cytoplasm_volume_voxels']
+        df[f'{channel_name}_nuclear_mean']         = nuc_mean
+        df[f'{channel_name}_nuclear_max']          = nuc_max
+        df[f'{channel_name}_nuclear_std']          = nuc_std
+        df[f'{channel_name}_nuclear_integrated']   = nuc_mean * nuc_vols
+
+        df[f'{channel_name}_cytoplasm_mean']       = cyt_mean
+        df[f'{channel_name}_cytoplasm_max']        = cyt_max
+        df[f'{channel_name}_cytoplasm_std']        = cyt_std
+        df[f'{channel_name}_cytoplasm_integrated'] = cyt_mean * cyt_vols
 
         df[f'{channel_name}_nc_ratio'] = (
-            df[f'{channel_name}_nuclear_mean'] / (df[f'{channel_name}_cytoplasm_mean'] + 1e-9)
+            nuc_mean / (cyt_mean + 1e-9)
         )
 
         del stack
@@ -177,4 +211,106 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
     print(df.head(), flush=True)
 
     _elapsed(t_total, 'TOTAL measure_intensity')
+    return df
+
+
+def _measure_channel(stack, mask, nucleus_ids):
+    """
+    Helper function. Calculates intensity metrics in a single pass (groups by label).
+    """
+    flat_vals = stack.ravel().astype(np.float32)
+    flat_labels = mask.ravel()
+
+    # sort by label
+    order = np.argsort(flat_labels, kind='stable')
+    sorted_labels = flat_labels[order]
+    sorted_vals = flat_vals[order]
+
+    # find boundaries btwn labels
+    unique_labels, counts = np.unique(sorted_labels, return_counts=True)
+
+    splits = np.cumsum(counts)[:-1]
+    groups = np.split(sorted_vals, splits)
+
+    label_to_stats = {}
+    for lbl, grp in zip(unique_labels, groups):
+        if lbl == 0:
+            continue
+        mean = grp.mean()
+        label_to_stats[lbl] = (mean, grp.max(), grp.std())
+
+    means = np.array([label_to_stats.get(i, (0.0, 0.0, 0.0))[0] for i in nucleus_ids])
+    maxs = np.array([label_to_stats.get(i, (0.0, 0.0, 0.0))[1] for i in nucleus_ids])
+    stds = np.array([label_to_stats.get(i, (0.0, 0.0, 0.0))[2] for i in nucleus_ids])
+
+    return means, maxs, stds
+
+
+
+def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, kd_radius=50):
+    """
+    Helper function. Calculates morphology metrics in a single pass (groups by label).
+    """
+    nucleus_ids = np.unique(mask)
+    nucleus_ids = nucleus_ids[nucleus_ids != 0]
+    voxel_volume_um3 = z_step_um * xy_pixel_um * xy_pixel_um
+
+    df = pd.DataFrame({'nucleus_id': nucleus_ids})
+
+    t_total = time.time()
+
+    props = regionprops(mask, spacing=(z_step_um, xy_pixel_um, xy_pixel_um)) # note: 3D mask
+
+    # regionprops returns one object per label, in label order but not guaranteed
+    # to match nucleus_ids ordering — so index by label explicitly
+    prop_by_label = {p.label: p for p in props}
+
+    centroids = np.array([prop_by_label[i].centroid for i in nucleus_ids])
+    df[["centroid_x", "centroid_y", "centroid_z"]] = centroids
+
+    centroids_um = centroids * voxel_volume_um3 # voxels --> um^3
+    kdtree = KDTree(centroids_um)
+    kdtree.count_neighbors(kdtree, kd_radius)
+
+    df['area'] = np.array([prop_by_label[i].area for i in nucleus_ids])
+    df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length for i in nucleus_ids])
+    df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length for i in nucleus_ids])
+
+    _elapsed(t_total, 'regionprops measurements')
+
+    # run marching cubes algorithm to generate 3D model of each nucleus
+    sphericities = []
+    t = time.time()
+
+    for nid in nucleus_ids:
+        # first, reduce the searching space to the nucleus' bounding box (from regionprops)
+        p = prop_by_label[nid]
+        slices = p.slice
+
+        # create a binary mask for the specific nucleus
+        binary_mask = (mask[slices] == nid)
+        # pad by 1 pixel so that mesh is closed on ends
+        binary_mask = np.pad(binary_mask, pad_width=1, mode='constant', constant_values=0)
+
+        try:
+            verts, faces, _, _ = marching_cubes(binary_mask, level=0.5, spacing=(z_step_um, xy_pixel_um, xy_pixel_um))
+            surface_area = mesh_surface_area(verts, faces)
+            # note: num_pixels property is equivalent to num_voxels for 3D images
+            volume = p.num_pixels * voxel_volume_um3
+            # calculate sphericity (how close is surface area to sphere?)
+            sphericity = (np.pi ** (1/3) * (6 * volume) ** (2/3)) / surface_area
+        except Exception:
+            # marching_cubes can fail for very small/irregular volumes
+            sphericity = np.nan
+
+        sphericities.append(sphericity)
+
+    df['sphericity'] = np.array(sphericities)
+    _elapsed(t, 'marching_cubes measurements')
+
+    print(f'MEASUREMENTS FOR {well_id}:', flush=True)
+    print(df.head(), flush=True)
+
+    _elapsed(t_total, 'TOTAL measure_morphology')
+
     return df

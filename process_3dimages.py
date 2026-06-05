@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from functions import segment_nuclei_3d, measure_intensity
+from functions import segment_nuclei_3d, calculate_metrics, get_cellpose_model
 
 # --- Parameters ---
 BASE_PATH = Path(sys.argv[1])
@@ -16,9 +16,7 @@ XY_PIXEL_UM = 0.6793
 NUCLEAR_CHANNEL = 1
 DIAMETER = 20
 USE_GPU = True
-# I TRIED TO MAKE THIS PARLLEL AND THEN I WAS TOLD THAT WAS A BAD IDEA 
-# BECAUSE OF HOW GPU IS STRUCTURED
-MAX_WORKERS = 1  # number of wells to process in parallel -- tune to your GPU memory
+MAX_WORKERS = 1  # TODO: try processing wells in parallel
 
 
 # --- Discover wells ---
@@ -35,6 +33,8 @@ wells_to_process = sorted(wells_found)
 print(f"Processing {len(wells_to_process)} wells: {wells_to_process}")
 
 
+model = get_cellpose_model(USE_GPU)
+
 # --- Per-well function ---
 def process_well(well):
     nuclear_masks, cytoplasm_masks = segment_nuclei_3d(
@@ -46,10 +46,11 @@ def process_well(well):
         scale=SCALE,  # downscale for faster processing and lower GPU memory usage
         nuclear_channel=NUCLEAR_CHANNEL,
         diameter=DIAMETER,
-        use_gpu=USE_GPU
+        use_gpu=USE_GPU,
+        model=model
     )
 
-    measurements = measure_intensity(
+    measurements = calculate_metrics(
         nuclear_masks=nuclear_masks,
         cytoplasm_masks=cytoplasm_masks,
         base_path=str(BASE_PATH),
