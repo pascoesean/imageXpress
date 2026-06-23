@@ -225,4 +225,4 @@ dependencies:
       - scipy==1.15.3
       - sympy==1.13.1
       - tqdm==4.67.3
-prefix: /home/spascoe/.conda/envs/cellpose2
+prefix: /home/jdweiss1/.conda/envs/cellpose2

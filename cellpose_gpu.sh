@@ -15,4 +15,4 @@ BASE_PATH=$1
 module load miniforge
 mamba activate cellpose2
 
-python3 -u process_3dimages.py "$BASE_PATH" cellpose --use_gpu
+python3 -u process_3dimages.py "$BASE_PATH" cellpose2 --use_gpu

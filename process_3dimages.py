@@ -5,11 +5,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from functions import segment_nuclei_3d, calculate_metrics, get_cellpose_model
+from functions import *
+from models import build_model
 
 # --- Parameters ---
 BASE_PATH = Path(sys.argv[1])
-SCALE = 1
+MODEL_TYPE = sys.argv[2]
+SCALE = 2
 N_CHANNELS = 5
 Z_STEP_UM = 5.0
 XY_PIXEL_UM = 0.6793
@@ -33,21 +35,23 @@ wells_to_process = sorted(wells_found)
 print(f"Processing {len(wells_to_process)} wells: {wells_to_process}")
 
 
-model = get_cellpose_model(USE_GPU)
+# load segmentation model
+model = build_model(
+    model_type=MODEL_TYPE,
+    anisotropy=(Z_STEP_UM / (XY_PIXEL_UM * SCALE)),
+    use_gpu=USE_GPU
+)
 
 # --- Per-well function ---
 def process_well(well):
     nuclear_masks, cytoplasm_masks = segment_nuclei_3d(
         well_id=well,
         base_path=str(BASE_PATH),
-        n_channels=N_CHANNELS,
-        z_step_um=Z_STEP_UM,
-        xy_pixel_um=XY_PIXEL_UM,
-        scale=SCALE,  # downscale for faster processing and lower GPU memory usage
+        scale=SCALE,  # downsample for faster processing and lower GPU memory usage
         nuclear_channel=NUCLEAR_CHANNEL,
         diameter=DIAMETER,
-        use_gpu=USE_GPU,
-        model=model
+        model=model,
+        model_type=MODEL_TYPE
     )
 
     measurements = calculate_metrics(
@@ -79,8 +83,8 @@ for i, well in enumerate(wells_to_process, start=1):
 
 # --- Combine and save ---
 all_measurements = pd.concat(measurements_list, ignore_index=True)
-all_measurements.to_csv(BASE_PATH / 'all_wells_measurements.csv', index=False)
+all_measurements.to_csv(BASE_PATH / f'all_wells_measurements_{MODEL_TYPE}.csv', index=False)
 print(f"\nDone. {len(all_measurements)} total nuclei across {len(wells_to_process)} wells.")
-print(f"Saved to {BASE_PATH / 'all_wells_measurements.csv'}")
+print(f"Saved to {BASE_PATH / f'all_wells_measurements_{MODEL_TYPE}.csv'}")
 if failed_wells:
     print(f"Failed wells: {failed_wells}")

@@ -19,10 +19,6 @@ def _elapsed(start, label):
     print(f'  [{label}] {time.time() - start:.1f}s', flush=True)
 
 
-# cached Cellpose model for this process
-_CELLPOSE_MODEL = None
-
-
 def _channel_file_paths(base_path, well_id, channel_index):
     z_planes = sorted(
         glob.glob(f'{base_path}/ZStep_*/*_{well_id}_w{channel_index}*.tif'),
@@ -45,20 +41,9 @@ def load_channel_stack(base_path, well_id, channel_index, dtype=None):
     return arr
 
 
-def get_cellpose_model(use_gpu):
-    """Return a cached Cellpose 2.x model (nuclei) for this process."""
-    global _CELLPOSE_MODEL
-    if _CELLPOSE_MODEL is None:
-        from cellpose import models
-        _CELLPOSE_MODEL = models.Cellpose(gpu=use_gpu, model_type='nuclei')
-        device = next(_CELLPOSE_MODEL.cp.net.parameters()).device
-        print(f'  Cellpose model loaded on {device}', flush=True)
-    return _CELLPOSE_MODEL
 
-
-def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
-                      nuclear_channel, diameter, use_gpu, dilation_iterations=10,
-                      scale=1, save_masks=True, model=None):
+def segment_nuclei_3d(well_id, base_path, nuclear_channel, diameter, model,
+                      model_type, dilation_iterations=10, scale=1, save_masks=True):
 
     t_total = time.time()
 
@@ -68,8 +53,6 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     print(f'  nuclear channel loaded with shape {nuclear_stack.shape}', flush=True)
     _elapsed(t, 'image loading')
 
-    model_to_use = model if model is not None else get_cellpose_model(use_gpu)
-
     # --- Downsample XY for faster inference ---
     t = time.time()
     print(f'Segmenting nuclei for {well_id} (scale={scale})...', flush=True)
@@ -78,17 +61,11 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     nuclear_stack_ds = downscale_local_mean(nuclear_stack, (1, scale, scale)).astype(np.float32)
     print(f'  downsampled stack shape: {nuclear_stack_ds.shape}', flush=True)
 
-    masks_ds, _, _, diams = model_to_use.eval(
+    masks_ds = model.eval(
         nuclear_stack_ds,
-        do_3D=True,
-        anisotropy=z_step_um / (xy_pixel_um * scale),
-        diameter=diameter / scale,
-        cellprob_threshold=2.0,
-        channels=[0,0], # grayscale
-        z_axis=0,
+        diameter_px = diameter / scale
     )
 
-    print(f'  estimated diameter by model: {diams:.1f}px', flush=True)
     print(f'  GPU memory after eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
 
     # --- Scale masks back to original XY resolution ---
@@ -130,8 +107,8 @@ def segment_nuclei_3d(well_id, base_path, n_channels, z_step_um, xy_pixel_um,
     # --- Save masks ---
     if save_masks:
         t = time.time()
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks_{model_type}.tif', nuclear_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks_{model_type}.tif', cytoplasm_masks.astype(np.uint16))
         _elapsed(t, 'saving masks')
 
     _elapsed(t_total, 'TOTAL segment_nuclei_3d')
@@ -267,8 +244,21 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     centroids = np.array([prop_by_label[i].centroid for i in nucleus_ids])
     df[["centroid_z_um", "centroid_y_um", "centroid_x_um"]] = centroids
 
-    df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length for i in nucleus_ids])
-    df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length for i in nucleus_ids])
+    # convert from um to voxels
+    df['centroid_x'] = df['centroid_x_um'] / xy_pixel_um
+    df['centroid_y'] = df['centroid_y_um'] / xy_pixel_um
+    df['centroid_z'] = df['centroid_z_um'] / z_step_um
+
+    # ignore nuclei that only span 1-3 z-slices
+    def z_span(prop):
+        return prop.bbox[3] - prop.bbox[0] # z_max - z_min
+
+    z_span_min_threshold = 3
+    flagged_nucleus_ids = {i for i in nucleus_ids if z_span(prop_by_label[i]) <= z_span_min_threshold}
+
+    df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
+    df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
+    df['aspect_ratio'] = df['axis_major_length'] / df['axis_minor_length']
 
     _elapsed(t_total, 'regionprops measurements')
 
@@ -279,7 +269,7 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     # query tree for info on 5 nearest neighbors
     neighbor_dists, neighbor_idx = kdtree.query(centroids, k=5)
 
-    # note: the 0th item in each list is a self-node --> start indexing at 1
+    # note: the 0th item in each list is a self-node --> start looking at index 1
     df['nn_dist'] = neighbor_dists[:, 1]
     df['nn_nucleus_id'] = nucleus_ids[neighbor_idx[:, 1]]
     df['nn5_mean_dist'] = neighbor_dists[:, 1:].mean(axis=1)
