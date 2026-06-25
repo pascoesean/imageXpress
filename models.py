@@ -42,7 +42,7 @@ class Cellpose2Model(SegmentationModel):
             do_3D=True,
             anisotropy=self.anisotropy,
             diameter=diameter_px,
-            cellprob_threshold=1.0,
+            cellprob_threshold=1.0, # tuned
             channels=[0, 0], # gray channel
             z_axis=0,
         )
@@ -62,8 +62,9 @@ class Cellpose4Model(SegmentationModel):
             do_3D=True,
             anisotropy=self.anisotropy,
             diameter=diameter_px,
-            cellprob_threshold=1.0, # tuned -- correctly classifies dim cells, omits junk
+            cellprob_threshold=1.0, # tuned
             z_axis=0,
+            batch_size=4,
         )
         return masks
 

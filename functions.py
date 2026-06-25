@@ -258,7 +258,6 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
 
     df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
     df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
-    df['aspect_ratio'] = df['axis_major_length'] / df['axis_minor_length']
 
     _elapsed(t_total, 'regionprops measurements')
 
