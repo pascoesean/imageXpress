@@ -214,9 +214,8 @@ def load_data(exp: str) -> pd.DataFrame:
 
 def get_training_labels(tri_data: pd.DataFrame) -> pd.DataFrame:
     """
-    Reads labeled tri-culture images and matches labels to the `tri-data`.
-    For robustness, adds in epithelial cell data from `mono-data`.
-    Returns a DataFrame with labeled training data from tri- and mono-
+    Reads labeled tri-culture images and matches labels to `tri_data`.
+    Returns a DataFrame with labeled training data from triculture.
     """
 
     training_data = pd.DataFrame()
@@ -458,6 +457,7 @@ def filter_low_confidence_cells(data: pd.DataFrame, rf: RandomForestClassifier, 
     # filter out cells w/ less-than-majority confidence
     low_conf_mask = max_prob < 0.5
     low_conf_idx = data['nucleus_id'][low_conf_mask]
+    print(data['rf_cell_type'][low_conf_mask].value_counts())
     data = data[~low_conf_mask]
 
     if make_mask:
@@ -523,7 +523,7 @@ if __name__ == '__main__':
         compare_rf_and_thresh(thresh_dict, rf_dict)
 
     # write out csv! (all donors compiled)
-    tri_df.to_csv('/home/jdweiss1/orcd/scratch/15/tri_data.csv')
+    #tri_df.to_csv('/home/jdweiss1/orcd/scratch/15/tri_data.csv')
 
 
 
@@ -547,7 +547,7 @@ if __name__ == '__main__':
         generate_cell_type_mask(co_df, donor, well, 'co', 'rf')
 
     # write out csv! (all donors compiled)
-    co_df.to_csv('/home/jdweiss1/orcd/scratch/15/co_data.csv')
+    #co_df.to_csv('/home/jdweiss1/orcd/scratch/15/co_data.csv')
 
 
 
@@ -560,9 +560,12 @@ if __name__ == '__main__':
     print('\nMono-culture Classification:')
     print(mono_df['rf_cell_type'].value_counts())
 
+    generate_cell_type_mask(mono_df, 284, 'B08', 'mono', 'rf')
+    generate_cell_type_mask(mono_df, 284, 'B09', 'mono', 'rf')
+    generate_cell_type_mask(mono_df, 287, 'B08', 'mono', 'rf')
+    generate_cell_type_mask(mono_df, 287, 'B09', 'mono', 'rf')
+
     mono_df['rf_cell_type'] = 'epithelial'
 
-    generate_cell_type_mask(mono_df, 287, 'B08', 'mono', 'rf')
-
     # write out csv! (all donors compiled)
-    mono_df.to_csv('/home/jdweiss1/orcd/scratch/15/mono_data.csv')
+    #mono_df.to_csv('/home/jdweiss1/orcd/scratch/15/mono_data.csv')

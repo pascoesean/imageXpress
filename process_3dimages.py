@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from functions import *
+from imageXpress.functions import *
 from models import build_model
 
 # --- Parameters ---
