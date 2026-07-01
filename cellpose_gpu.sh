@@ -13,6 +13,6 @@
 BASE_PATH=$1
 
 module load miniforge
-mamba activate cellpose2
+mamba activate cellpose4
 
-python3 -u process_3dimages.py "$BASE_PATH" cellpose2 --use_gpu
+python3 -u process_widefield.py "$BASE_PATH" cellpose4 --use_gpu
