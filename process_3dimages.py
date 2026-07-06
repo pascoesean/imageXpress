@@ -1,24 +1,34 @@
+import json
 import re
 import sys
-import tifffile
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from imageXpress.functions_3dimages import *
+from functions_3dimages import *
 from models import build_model
 
 # --- Parameters ---
-BASE_PATH = Path(sys.argv[1])
-MODEL_TYPE = sys.argv[2]
-SCALE = 2
+BATCH_ID = sys.argv[1]
+
+with open('cellpose_params.json') as f:
+    all_params = json.load(f)
+
+if BATCH_ID not in all_params:
+    raise KeyError(f"Batch ID '{BATCH_ID}' not found in cellpose_params.json")
+
+p = all_params[BATCH_ID]
+BASE_PATH = Path(p['base_path'])
+SCALE = p['scale']
+XY_PIXEL_UM = p['xy_pixel_um']
+DIAMETER_UM = p['diameter_um']
+Z_STEP_UM = p['z_step_um']
+CELLPROB_THRESHOLD = p['cellprob_threshold']
+
 N_CHANNELS = 5
-Z_STEP_UM = 5.0
-XY_PIXEL_UM = 0.6793
 NUCLEAR_CHANNEL = 1
-DIAMETER = 20
 USE_GPU = True
-MAX_WORKERS = 1  # TODO: try processing wells in parallel
+MAX_WORKERS = 1
 
 
 # --- Discover wells ---
@@ -37,8 +47,10 @@ print(f"Processing {len(wells_to_process)} wells: {wells_to_process}")
 
 # load segmentation model
 model = build_model(
-    model_type=MODEL_TYPE,
+    model_type='cellpose2',
+    diameter=(DIAMETER_UM / (XY_PIXEL_UM * SCALE)),
     anisotropy=(Z_STEP_UM / (XY_PIXEL_UM * SCALE)),
+    cellprob_threshold=CELLPROB_THRESHOLD,
     use_gpu=USE_GPU
 )
 
@@ -49,9 +61,7 @@ def process_well(well):
         base_path=str(BASE_PATH),
         scale=SCALE,  # downsample for faster processing and lower GPU memory usage
         nuclear_channel=NUCLEAR_CHANNEL,
-        diameter=DIAMETER,
-        model=model,
-        model_type=MODEL_TYPE
+        model=model
     )
 
     measurements = calculate_metrics(
@@ -64,7 +74,7 @@ def process_well(well):
         xy_pixel_um=XY_PIXEL_UM
     )
 
-    measurements['well_id'] = well
+    measurements['well_id'] = f'{well}'
     return well, measurements
 
 
@@ -83,8 +93,8 @@ for i, well in enumerate(wells_to_process, start=1):
 
 # --- Combine and save ---
 all_measurements = pd.concat(measurements_list, ignore_index=True)
-all_measurements.to_csv(BASE_PATH / f'all_wells_measurements_{MODEL_TYPE}.csv', index=False)
+all_measurements.to_csv(BASE_PATH / f'all_wells_measurements.csv', index=False)
 print(f"\nDone. {len(all_measurements)} total nuclei across {len(wells_to_process)} wells.")
-print(f"Saved to {BASE_PATH / f'all_wells_measurements_{MODEL_TYPE}.csv'}")
+print(f"Saved to {BASE_PATH / f'all_wells_measurements.csv'}")
 if failed_wells:
     print(f"Failed wells: {failed_wells}")

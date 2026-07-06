@@ -1,4 +1,5 @@
 import numpy as np
+from cellpose import models
 
 
 class SegmentationModel:
@@ -11,8 +12,10 @@ class SegmentationModel:
       - Cellpose4Model ('cellpose4')
     """
 
-    def __init__(self, anisotropy: float, use_gpu: bool = True):
+    def __init__(self, diameter: float, anisotropy: float, cellprob_threshold: float, use_gpu: bool = True):
+        self.diameter = diameter
         self.anisotropy = anisotropy
+        self.cellprob_threshold = cellprob_threshold
         self.use_gpu = use_gpu
         self.model = None
         self.load()
@@ -21,7 +24,7 @@ class SegmentationModel:
         """Load/initialize the underlying model."""
         raise NotImplementedError
 
-    def eval(self, stack: np.ndarray, diameter_px: float) -> np.ndarray:
+    def eval(self, stack: np.ndarray) -> np.ndarray:
         """
         Run inference on a 3D stack (z,y,x).
         Returns an integer label array of the same shape.
@@ -32,17 +35,16 @@ class SegmentationModel:
 class Cellpose2Model(SegmentationModel):
 
     def load(self):
-        from cellpose import models
         self.model = models.Cellpose(gpu=self.use_gpu, model_type='nuclei')
         print(f'[Cellpose2Model] loaded (gpu={self.use_gpu})')
 
-    def eval(self, stack: np.ndarray, diameter_px: float) -> np.ndarray:
+    def eval(self, stack: np.ndarray) -> np.ndarray:
         masks, _, _, _ = self.model.eval(
             stack,
             do_3D=True,
+            diameter=self.diameter,
             anisotropy=self.anisotropy,
-            diameter=diameter_px,
-            cellprob_threshold=1.0, # tuned
+            cellprob_threshold=self.cellprob_threshold,
             channels=[0, 0], # gray channel
             z_axis=0,
         )
@@ -52,17 +54,16 @@ class Cellpose2Model(SegmentationModel):
 class Cellpose4Model(SegmentationModel):
 
     def load(self):
-        from cellpose import models
         self.model = models.CellposeModel(gpu=self.use_gpu)
         print(f'[Cellpose4Model] loaded (gpu={self.use_gpu})')
 
-    def eval(self, stack: np.ndarray, diameter_px: float) -> np.ndarray:
+    def eval(self, stack: np.ndarray) -> np.ndarray:
         masks, _, _, _ = self.model.eval(
             stack,
             do_3D=True,
+            diameter=self.diameter,
             anisotropy=self.anisotropy,
-            diameter=diameter_px,
-            cellprob_threshold=1.0, # tuned
+            cellprob_threshold=self.cellprob_threshold,
             z_axis=0,
             batch_size=4,
         )

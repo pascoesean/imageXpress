@@ -10,9 +10,9 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-BASE_PATH=$1
+BATCH_ID=$1
 
 module load miniforge
-mamba activate cellpose4
+mamba activate cellpose2
 
-python3 -u process_widefield.py "$BASE_PATH" cellpose4 --use_gpu
+python3 -u process_3dimages.py "$BATCH_ID" --use_gpu

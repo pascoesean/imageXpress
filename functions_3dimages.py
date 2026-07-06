@@ -42,8 +42,8 @@ def load_channel_stack(base_path, well_id, channel_index, dtype=None):
 
 
 
-def segment_nuclei_3d(well_id, base_path, nuclear_channel, diameter, model,
-                      model_type, dilation_iterations=10, scale=1, save_masks=True):
+def segment_nuclei_3d(well_id, base_path, nuclear_channel, model,
+                      dilation_iterations=10, scale=1, save_masks=True):
 
     t_total = time.time()
 
@@ -61,10 +61,7 @@ def segment_nuclei_3d(well_id, base_path, nuclear_channel, diameter, model,
     nuclear_stack_ds = downscale_local_mean(nuclear_stack, (1, scale, scale)).astype(np.float32)
     print(f'  downsampled stack shape: {nuclear_stack_ds.shape}', flush=True)
 
-    masks_ds = model.eval(
-        nuclear_stack_ds,
-        diameter_px = diameter / scale
-    )
+    masks_ds = model.eval(nuclear_stack_ds)
 
     print(f'  GPU memory after eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
 
@@ -107,8 +104,8 @@ def segment_nuclei_3d(well_id, base_path, nuclear_channel, diameter, model,
     # --- Save masks ---
     if save_masks:
         t = time.time()
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks_{model_type}.tif', nuclear_masks.astype(np.uint16))
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks_{model_type}.tif', cytoplasm_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
         _elapsed(t, 'saving masks')
 
     _elapsed(t_total, 'TOTAL segment_nuclei_3d')
@@ -249,15 +246,18 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     df['centroid_y'] = df['centroid_y_um'] / xy_pixel_um
     df['centroid_z'] = df['centroid_z_um'] / z_step_um
 
-    # ignore nuclei that only span 1-3 z-slices
-    def z_span(prop):
-        return prop.bbox[3] - prop.bbox[0] # z_max - z_min
+    # only calculate axis lengths for non-degenerate (big) cells
+    def is_degenerate(i, z_thresh=3, min_voxels=20):
+        prop = prop_by_label[i]
+        z_extent = prop.bbox[3] - prop.bbox[0] # z_max - z_min
+        return z_extent <= z_thresh or prop.num_pixels < min_voxels
 
-    z_span_min_threshold = 3
-    flagged_nucleus_ids = {i for i in nucleus_ids if z_span(prop_by_label[i]) <= z_span_min_threshold}
-
-    df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
-    df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length if (i not in flagged_nucleus_ids) else np.nan for i in nucleus_ids])
+    try:
+        df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length if (not is_degenerate(i)) else np.nan for i in nucleus_ids])
+        df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length if (not is_degenerate(i)) else np.nan for i in nucleus_ids])
+    except ValueError:
+        df['axis_major_length'] = np.nan
+        df['axis_minor_length'] = np.nan
 
     _elapsed(t_total, 'regionprops measurements')
 
