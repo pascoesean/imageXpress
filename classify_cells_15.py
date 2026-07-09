@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import KFold
 import pickle
 
 np.random.seed(42)
@@ -43,6 +44,8 @@ features = ['nuclear_volume_voxels', 'cytoplasm_volume_voxels',
        'centroid_z', 'axis_major_length', 'axis_minor_length', 'aspect_ratio',
        'nn_dist', 'nn5_mean_dist', 'num_neighbors_within_50_um', 'sphericity',
        ]
+
+features_no_epcam = [ft for ft in features if 'channel_5' not in ft]
 
 channels = {
     1: 'DAPI',
@@ -157,7 +160,7 @@ def generate_cell_type_mask(df: pd.DataFrame, donor: int | str, well: str, exp: 
     """
 
     # given a df with cell type predictions, output a tiff cell type mask
-    file = f'/home/jdweiss1/orcd/scratch/15/{str(donor)}-{exp}/masks/{well}_nuclear_masks_cellpose2.tif'
+    file = f'/home/jdweiss1/orcd/scratch/15/{str(donor)}-{exp}/masks/{well}_nuclear_masks.tif'
     img = tifffile.imread(file)
 
     type_codes = {'background': 0, 'epithelial': 1, 'ESC': 2, 'macrophage': 3, 'unknown': 4}
@@ -189,7 +192,7 @@ def generate_cell_type_mask(df: pd.DataFrame, donor: int | str, well: str, exp: 
 
 def load_data(exp: str) -> pd.DataFrame:
     """
-    Loads data from all_wells_measurements_cellpose2.csv for all donors within `exp`.
+    Loads data from all_wells_measurements.csv for all donors within `exp`.
     Compiles and returns the data as one DataFrame.
     """
 
@@ -197,7 +200,7 @@ def load_data(exp: str) -> pd.DataFrame:
     data = pd.DataFrame()
 
     for donor in donors:
-        mini_df = pd.read_csv(f'/home/jdweiss1/orcd/scratch/15/{donor}-{exp}/all_wells_measurements_cellpose2.csv')
+        mini_df = pd.read_csv(f'/home/jdweiss1/orcd/scratch/15/{donor}-{exp}/all_wells_measurements.csv')
         mini_df['donor_id'] = int(donor)
         data = pd.concat([data, mini_df])
 
@@ -277,7 +280,7 @@ def thresholds_method(data: pd.DataFrame, plot=False) -> tuple[pd.DataFrame, lis
         # 1D histograms for Mac and EpCAM channels
         plt.subplots()
         plot_histograms(data, channels, thresholds)
-        plt.savefig('figs/cell_type_hist.png')
+        plt.savefig('figs_15/cell_type_hist.png')
 
         # 2D histogram for Mac and EpCAM channels
         plt.subplots()
@@ -288,7 +291,7 @@ def thresholds_method(data: pd.DataFrame, plot=False) -> tuple[pd.DataFrame, lis
         plt.ylabel('EpCAM')
         plt.axvline(x=np.log1p(mac_threshold), color='k', ls='--')
         plt.axhline(y=np.log1p(eeo_threshold), color='k', ls='--')
-        plt.savefig('figs/cell_type_hist2d.png')
+        plt.savefig('figs_15/cell_type_hist2d.png')
 
     # ASSIGN LABELS!!!
 
@@ -329,7 +332,7 @@ def eval_thresholds(training_data: pd.DataFrame, thresholds: list) -> dict:
 
 # RF classifier
 
-def rf_method(training_data: pd.DataFrame, data: pd.DataFrame, plot=False) -> tuple[pd.DataFrame, RandomForestClassifier]:
+def rf_method(training_data: pd.DataFrame, features: list, data: pd.DataFrame, plot=False) -> tuple[pd.DataFrame, RandomForestClassifier]:
     """ Assigns RF cell types. Returns a modified copy of a DataFrame AND the RF model itself. """
 
     X = training_data[features].to_numpy()
@@ -353,52 +356,38 @@ def rf_method(training_data: pd.DataFrame, data: pd.DataFrame, plot=False) -> tu
         ax.set_title("Feature importances using MDI")
         ax.set_ylabel("Mean decrease in impurity")
         plt.tight_layout()
-        plt.savefig('figs/cell_type_rf_features.png')
+        plt.savefig('figs_15/cell_type_rf_features.png')
 
     return data, rf
 
 
 
-def eval_rf(training_data: pd.DataFrame) -> dict:
+def eval_rf_cv(training_data: pd.DataFrame, features: list) -> dict:
     """
-    - Trains on 2 donors (tri-culture & mono-culture)
-    - Evaluates on the 3rd donor (tri-culture ONLY)
-    - Does this 3 times (3-fold cross validation)
+    - Trains on 80% of the data, validates on 20%.
+    - 5-fold CV
     """
-
     X = training_data[features].to_numpy()
     y = training_data['cell_type'].to_numpy()
 
-    groups = training_data['donor_id'].to_numpy()
-    logo = LeaveOneGroupOut()
+    all_y_true, all_y_pred = [], []
 
-    all_y_true = []
-    all_y_pred = []
+    for i, (train, test) in enumerate(KFold(n_splits=5).split(X)):
+        X_train, X_test = X[train], X[test]
+        y_train, y_test = y[train], y[test]
 
-    # train on two donors and validate on the third
-    for donor, (train_idx, test_idx) in zip(np.unique(groups), logo.split(training_data, groups=groups)):
-
-        X_train, X_test = X[train_idx], X[test_idx]
-        y_train, y_test = y[train_idx], y[test_idx]
-
-        # train `balanced` so that we don't bias toward a more prevalent class (epithelial)
         rf = RandomForestClassifier(n_estimators=500, class_weight='balanced', n_jobs=-1)
         rf.fit(X_train, y_train)
         y_pred = rf.predict(X_test)
 
-        print(f"\n=== Held-out donor: {donor} ===")
-        print(classification_report(y_test, y_pred))
-        print(confusion_matrix(y_test, y_pred, labels=["epithelial", "ESC", "macrophage"]))
-
         all_y_true.extend(y_test)
         all_y_pred.extend(y_pred)
 
-    print("\n=== Overall Leave-One-Donor-Out Performance ===")
+    print(f"\n=== Overall CV Perfomance ===")
     print(classification_report(all_y_true, all_y_pred))
-    print(confusion_matrix(all_y_true, all_y_pred, labels=["epithelial", "ESC", "macrophage"]))
+    print(confusion_matrix(all_y_true, all_y_pred, labels=['epithelial', 'ESC', 'macrophage']))
 
-    rf_dict = classification_report(all_y_true, all_y_pred, output_dict=True)
-
+    rf_dict = classification_report(all_y_true, all_y_pred)
     return rf_dict
 
 
@@ -439,20 +428,20 @@ def compare_rf_and_thresh(thresh_dict: dict, rf_dict: dict) -> None:
     plt.title('Classification Performance by Cell Type')
     plt.legend(title='')
     plt.tight_layout()
-    plt.savefig('figs/cell_type_method_f1s.png')
+    plt.savefig('figs_15/cell_type_method_f1s.png')
 
 
 
 # cell class probabilities
 
-def filter_low_confidence_cells(data: pd.DataFrame, rf: RandomForestClassifier, make_mask=False) -> pd.DataFrame:
+def filter_low_confidence_cells(data: pd.DataFrame, features: list, rf: RandomForestClassifier, make_mask=False) -> pd.DataFrame:
 
     probs = rf.predict_proba(data[features])
     max_prob = probs.max(axis=1) # max_prob = prob corresponding to selected class label
 
     plt.subplots()
     plt.hist(max_prob, bins=50)
-    plt.savefig('figs/cell_type_conf_hist.png')
+    plt.savefig('figs_15/cell_type_conf_hist.png')
 
     # filter out cells w/ less-than-majority confidence
     low_conf_mask = max_prob < 0.5
@@ -462,7 +451,7 @@ def filter_low_confidence_cells(data: pd.DataFrame, rf: RandomForestClassifier, 
 
     if make_mask:
         # make low-confidence cells mask
-        img_mask = tifffile.imread('/home/jdweiss1/orcd/scratch/15/287-tri/masks/B02_nuclear_masks_cellpose2.tif').copy()
+        img_mask = tifffile.imread('/home/jdweiss1/orcd/scratch/15/287-tri/masks/B02_nuclear_masks.tif').copy()
         img_mask[~np.isin(img_mask, low_conf_idx)] = 0
         tifffile.imwrite('/home/jdweiss1/orcd/scratch/15/287-tri/masks/B02_low_prob.tif', img_mask)
 
@@ -486,24 +475,35 @@ if __name__ == '__main__':
     # plot training data in PC space
     plt.subplots()
     plot_pca(training_df.dropna(), features, labels='cell_type')
-    plt.savefig('figs/cell_type_pca_training.png')
+    plt.savefig('figs_15/cell_type_pca_training.png')
 
     # run RF classification
-    tri_df, rf = rf_method(training_df, tri_df, plot=True)
-    rf_dict = eval_rf(training_df)
-    tri_df = filter_low_confidence_cells(tri_df, rf)
+    tri_df, rf = rf_method(training_df, features, tri_df, plot=False)
+    rf_dict = eval_rf_cv(training_df, features)
+    tri_df = filter_low_confidence_cells(tri_df, features, rf)
 
     print('\nTri-culture Classification:')
     print(tri_df['rf_cell_type'].value_counts())
 
     # save RF model
-    with open('models/tri-rf.pkl', "wb") as file:
+    with open('models/rf_15.pkl', "wb") as file:
         pickle.dump(rf, file)
+
+    # try TF with no EpCAM
+    tri_df_no_epcam, rf_no_epcam = rf_method(training_df, features_no_epcam, tri_df, plot=True)
+    rf_no_epcam_dict = eval_rf_cv(training_df, features_no_epcam)
+    tri_df_no_epcam = filter_low_confidence_cells(tri_df_no_epcam, features_no_epcam, rf_no_epcam)
+
+    print('\nTri-culture Classification (no EpCAM):')
+    print(tri_df_no_epcam['rf_cell_type'].value_counts())
+
+    with open('models/rf_15_no_epcam.pkl', 'wb') as file:
+        pickle.dump(rf_no_epcam, file)
 
     # plot *all* tri-culture data in PC space
     plt.subplots()
     plot_pca(tri_df.dropna(), features, labels='rf_cell_type')
-    plt.savefig('figs/cell_type_pca_tri_rf.png')
+    plt.savefig('figs_15/cell_type_pca_tri_rf.png')
 
 
     # generate cell type masks for validation
@@ -530,9 +530,8 @@ if __name__ == '__main__':
     # CO-CULTURE
 
     co_df = load_data('co')
-
     co_df['rf_cell_type'] = rf.predict(co_df[features])
-    co_df = filter_low_confidence_cells(co_df, rf)
+    co_df = filter_low_confidence_cells(co_df, features, rf)
 
     print('\nCo-culture Classification:')
     print(co_df['rf_cell_type'].value_counts())
@@ -540,7 +539,7 @@ if __name__ == '__main__':
     # plot *all* co-culture data in PC space
     plt.subplots()
     plot_pca(co_df.dropna(), features, labels='rf_cell_type')
-    plt.savefig('figs/cell_type_pca_co_rf.png')
+    plt.savefig('figs_15/cell_type_pca_co_rf.png')
 
     # generate cell type masks for validation
     for donor, well in product((284, 287, 304), ('B02', 'B03')):

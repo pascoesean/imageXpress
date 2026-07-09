@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from functions_3dimages import *
+from functions import *
 from models import build_model
 
 # --- Parameters ---
@@ -23,6 +23,7 @@ SCALE = p['scale']
 XY_PIXEL_UM = p['xy_pixel_um']
 DIAMETER_UM = p['diameter_um']
 Z_STEP_UM = p['z_step_um']
+ANISOTROPY = p['anisotropy']
 CELLPROB_THRESHOLD = p['cellprob_threshold']
 
 N_CHANNELS = 5
@@ -49,7 +50,7 @@ print(f"Processing {len(wells_to_process)} wells: {wells_to_process}")
 model = build_model(
     model_type='cellpose2',
     diameter=(DIAMETER_UM / (XY_PIXEL_UM * SCALE)),
-    anisotropy=(Z_STEP_UM / (XY_PIXEL_UM * SCALE)),
+    anisotropy=ANISOTROPY,
     cellprob_threshold=CELLPROB_THRESHOLD,
     use_gpu=USE_GPU
 )
@@ -59,7 +60,7 @@ def process_well(well):
     nuclear_masks, cytoplasm_masks = segment_nuclei_3d(
         well_id=well,
         base_path=str(BASE_PATH),
-        scale=SCALE,  # downsample for faster processing and lower GPU memory usage
+        scale=SCALE,
         nuclear_channel=NUCLEAR_CHANNEL,
         model=model
     )

@@ -4,6 +4,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5.0,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-284-co": {
@@ -11,6 +12,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-284-mono": {
@@ -25,6 +27,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-287-co": {
@@ -39,6 +42,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-304-tri": {
@@ -46,6 +50,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-304-co": {
@@ -53,6 +58,7 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
   "15-304-mono": {
@@ -60,38 +66,79 @@
     "scale": 2,
     "xy_pixel_um": 0.6793,
     "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 1.0
   },
-  "12-tri": {
-    "base_path": "/home/jdweiss1/orcd/scratch/12/tri",
+  "14-tri": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14/tri",
     "scale": 1,
     "xy_pixel_um": 1.3586,
     "diameter_um": 15,
-    "z_step_um": 5,
+    "z_step_um": 3,
+    "anisotropy": 2.21,
     "cellprob_threshold": 0
   },
-  "12-co": {
-    "base_path": "/home/jdweiss1/orcd/scratch/12/co",
+  "14-co": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14/co",
     "scale": 1,
     "xy_pixel_um": 1.3586,
     "diameter_um": 15,
-    "z_step_um": 5,
+    "z_step_um": 3,
+    "anisotropy": 2.21,
     "cellprob_threshold": 0
   },
-  "12-mono": {
-    "base_path": "/home/jdweiss1/orcd/scratch/12/mono",
+  "14-mono": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14/mono",
     "scale": 1,
     "xy_pixel_um": 1.3586,
     "diameter_um": 15,
-    "z_step_um": 5,
+    "z_step_um": 3,
+    "anisotropy": 2.21,
     "cellprob_threshold": 0
   },
-  "12-escmac": {
-    "base_path": "/home/jdweiss1/orcd/scratch/12/escmac",
+  "14-low-res-tri": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14-low-res/tri",
+    "scale": 1,
+    "xy_pixel_um": 2.0379,
+    "diameter_um": 15,
+    "z_step_um": 5,
+    "anisotropy": 2.45,
+    "cellprob_threshold": 0
+  },
+  "14-low-res-co": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14-low-res/co",
+    "scale": 1,
+    "xy_pixel_um": 2.0379,
+    "diameter_um": 15,
+    "z_step_um": 5,
+    "anisotropy": 2.45,
+    "cellprob_threshold": 0
+  },
+  "14-low-res-mono": {
+    "base_path": "/home/jdweiss1/orcd/scratch/14-low-res/mono",
+    "scale": 1,
+    "xy_pixel_um": 2.0379,
+    "diameter_um": 15,
+    "z_step_um": 5,
+    "anisotropy": 2.45,
+    "cellprob_threshold": 0
+  },
+  "12-mono1": {
+    "base_path": "/home/jdweiss1/orcd/scratch/12/mono1",
     "scale": 1,
     "xy_pixel_um": 1.3586,
     "diameter_um": 15,
     "z_step_um": 5,
+    "anisotropy": 3.68,
+    "cellprob_threshold": 0
+  },
+  "12-co2": {
+    "base_path": "/home/jdweiss1/orcd/scratch/12/co2",
+    "scale": 1,
+    "xy_pixel_um": 1.3586,
+    "diameter_um": 15,
+    "z_step_um": 5,
+    "anisotropy": 3.68,
     "cellprob_threshold": 0
   }
 }

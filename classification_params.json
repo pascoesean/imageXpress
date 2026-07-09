@@ -1,0 +1,83 @@
+{
+    "12": {
+        "channels": {
+            "1": "DAPI",
+            "2": "Mac",
+            "3": "NFkB",
+            "4": "pcJun",
+            "5": "actin"
+        },
+        "cell_types": {
+            "1": "ESC",
+            "2": "macrophage"
+        },
+        "subfolders": ["mono1", "co2"],
+        "label_imgs": [
+            "/home/jdweiss1/orcd/scratch/12/co2/labels/E02_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/12/co2/labels/E03_cell_type.tif"
+        ],
+        "output_dir": "/home/jdweiss1/orcd/scratch/12/"
+    },
+    "14-low-res": {
+        "channels": {
+            "1": "DAPI",
+            "2": "Mac",
+            "3": "NFkB",
+            "4": "pcJun",
+            "5": "actin"
+        },
+        "cell_types": {
+            "1": "epithelial",
+            "2": "ESC",
+            "3": "macrophage"
+        },
+        "subfolders": ["mono", "co", "tri"],
+        "label_imgs": [
+            "/home/jdweiss1/orcd/scratch/14-low-res/tri/labels/B06_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/14-low-res/tri/labels/B07_cell_type.tif"],
+        "output_dir": "/home/jdweiss1/orcd/scratch/14-low-res/"
+    },
+    "14": {
+        "channels": {
+            "1": "DAPI",
+            "2": "Mac",
+            "3": "NFkB",
+            "4": "pcJun",
+            "5": "actin"
+        },
+        "cell_types": {
+            "1": "epithelial",
+            "2": "ESC",
+            "3": "macrophage"
+        },
+        "subfolders": ["mono", "co", "tri"],
+        "label_imgs": [
+            "/home/jdweiss1/orcd/scratch/14/tri/labels/B06_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/14/tri/labels/B07_cell_type.tif"],
+        "output_dir": "/home/jdweiss1/orcd/scratch/14/"
+    },
+    "15": {
+        "channels": {
+            "1": "DAPI",
+            "2": "pcJun",
+            "3": "ki67",
+            "4": "Mac",
+            "5": "EpCAM"
+        },
+        "cell_types": {
+            "1": "epithelial",
+            "2": "ESC",
+            "3": "macrophage"
+        },
+        "subfolders": ["mono", "co", "tri"],
+        "label_imgs": [
+            "/home/jdweiss1/orcd/scratch/15/284-tri/labels/B02_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/15/284-tri/labels/B03_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/15/287-tri/labels/B02_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/15/287-tri/labels/B03_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/15/304-tri/labels/B02_cell_type.tif",
+            "/home/jdweiss1/orcd/scratch/15/304-tri/labels/B03_cell_type.tif"
+        ],
+        "output_dir": "/home/jdweiss1/orcd/scratch/15/"
+    }
+}

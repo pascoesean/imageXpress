@@ -172,7 +172,7 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
         df[f'{channel_name}_cytoplasm_integrated'] = cyt_mean * cyt_vols
 
         df[f'{channel_name}_nc_ratio'] = (
-            nuc_mean / (cyt_mean + 1e-9)
+            (nuc_mean * nuc_vols) / (cyt_mean * cyt_vols + 1e-9)
         )
 
         del stack
