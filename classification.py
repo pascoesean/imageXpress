@@ -13,6 +13,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import KFold
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.inspection import permutation_importance
 import pickle
 
 np.random.seed(42)
@@ -30,22 +31,30 @@ if EXP_ID not in all_params:
 
 def integerize(dict):
     """
-    Converts a dict with str keys to int keys.
+    Converts a dict with str values to int values.
     """
     return {int(k): v for k, v in dict.items()}
 
 p = all_params[EXP_ID]
 CHANNELS = integerize(p['channels'])
-CELL_TYPES = integerize(p['cell_types'])
+CELL_TYPES = p['cell_types']
 SUBFOLDERS = p['subfolders']
 LABEL_IMGS = p['label_imgs']
 OUTPUT_DIR = p['output_dir']
 
 
+def map_col_name(old_col):
+    _, num, rest = old_col.split('_', 2)
+    return f'{CHANNELS[int(num)]}_{rest}'
+
+def rename_cols(columns):
+    # get a list of channels which contain digits
+    return [map_col_name(old_col) if 'channel_' in old_col else old_col for old_col in columns]
+
 # input features for PCA, RF, ...
 FEATURES = ['nuclear_volume_voxels', 'cytoplasm_volume_voxels',
-       'channel_1_nuclear_mean', 'channel_1_nuclear_max',
-       'channel_1_nuclear_std', 'channel_1_cytoplasm_mean',
+       'channel_1_nuclear_mean', 'channel_1_nuclear_max', 
+       'channel_1_nuclear_std', 'channel_1_cytoplasm_mean', 
        'channel_1_cytoplasm_max', 'channel_1_cytoplasm_std', 'channel_1_nc_ratio',
        'channel_2_nuclear_mean', 'channel_2_nuclear_max',
        'channel_2_nuclear_std', 'channel_2_cytoplasm_mean',
@@ -61,7 +70,7 @@ FEATURES = ['nuclear_volume_voxels', 'cytoplasm_volume_voxels',
        'channel_5_cytoplasm_max', 'channel_5_cytoplasm_std', 'channel_5_nc_ratio',
        'centroid_z', 'axis_major_length', 'axis_minor_length', 'aspect_ratio',
        'nn_dist', 'nn5_mean_dist', 'num_neighbors_within_50_um', 'sphericity',
-       ]
+]
 
 
 
@@ -71,7 +80,7 @@ FEATURES = ['nuclear_volume_voxels', 'cytoplasm_volume_voxels',
 def plot_pca(df: pd.DataFrame, features: list, labels=None, n_components=2) -> None:
     """ Plots PCA of `df`, assumes 2 components, also shows PC histograms! """
 
-    X = df[features].to_numpy()
+    X = df.dropna()[features].to_numpy()
     X_scaled = StandardScaler().fit_transform(X)
 
     pca = PCA(n_components=n_components)
@@ -80,7 +89,7 @@ def plot_pca(df: pd.DataFrame, features: list, labels=None, n_components=2) -> N
     pca_df = pd.DataFrame(data=components, columns=[f'PC{i}' for i in range(1, n_components+1)])
 
     if labels is not None:
-        pca_df[labels] = df[labels].to_numpy()
+        pca_df[labels] = df.dropna()[labels].to_numpy()
         sns.pairplot(pca_df, hue=labels, plot_kws={'size': 1, 'alpha': 0.2})
 
     else:
@@ -109,34 +118,39 @@ def plot_histograms(df: pd.DataFrame, channels: dict, thresholds=None, labels=No
             axs[i].axvline(x=thresholds[i], color='k', ls='--')
 
 
-def generate_cell_type_mask(df: pd.DataFrame, well: str, subfolder: str) -> None:
+def generate_cell_type_masks(df: pd.DataFrame) -> None:
     """
     Given a `df` with cell type labels, create an image mask where each nucleus is labelled:
         1: epithelial
         2: ESC
         3: macrophage
-    Exports the mask to /home/jdweiss1/orcd/scratch/{exp}/{culture_type}/masks
+    Exports the masks to /home/jdweiss1/orcd/scratch/{exp}/{subfolder}/masks
     """
 
-    # given a df with cell type predictions, output a tiff cell type mask
-    file = f'/home/jdweiss1/orcd/scratch/{EXP_ID}/{subfolder}/masks/{well}_nuclear_masks.tif'
-    img = tifffile.imread(file)
+    for subfolder in SUBFOLDERS:
 
-    type_codes = CELL_TYPES.copy()
-    type_codes[0] = 'background'
+        wells = np.unique(df[df['subfolder'] == subfolder]['well_id'])
 
-    # restrict df to specific donor and well
-    filter = df['well_id'] == well
-    df = df[filter]
+        for well in wells:
+            # read in nuclear masks
+            file = f'/home/jdweiss1/orcd/scratch/{EXP_ID}/{subfolder}/masks/{well}_nuclear_masks.tif'
+            img = tifffile.imread(file)
 
-    # build a lookup array for fast indexing
-    lookup = np.zeros(img.max() + 1, dtype=np.uint8)
-    for _, row in df.iterrows():
-        lookup[int(row['nucleus_id'])] = type_codes[row['rf_cell_type']]
+            type_codes = CELL_TYPES.copy()
+            type_codes['background'] = 0
 
-    # map nuclear ids to cell types
-    cell_type_mask = lookup[img]
-    tifffile.imwrite(f'/home/jdweiss1/orcd/scratch/{EXP_ID}/{subfolder}/masks/{well}_cell_type.tif', cell_type_mask)
+            # restrict df to specific subfolder and well
+            filter = (df['subfolder'] == subfolder) & (df['well_id'] == well)
+            df = df[filter]
+
+            # build a lookup array for fast indexing
+            lookup = np.zeros(img.max() + 1, dtype=np.uint8)
+            for _, row in df.iterrows():
+                lookup[int(row['nucleus_id'])] = type_codes[row['rf_cell_type']]
+
+            # map nuclear ids to cell types
+            cell_type_mask = lookup[img]
+            tifffile.imwrite(f'/home/jdweiss1/orcd/scratch/{EXP_ID}/{subfolder}/masks/{well}_cell_type.tif', cell_type_mask)
 
 
 
@@ -180,7 +194,7 @@ def get_training_labels(df: pd.DataFrame) -> pd.DataFrame:
 
     # map tri-culture cell-type labels to nuclear ids
     for file in LABEL_IMGS:
-        print(f'\nLoading training data from {file}')
+        print(f'Loading training data from {file}')
         labels = tifffile.imread(file)
         well = re.search(r'([A-Z](?:0[2-9]|1[01]))', file).group(1)
         subfolder = re.search(r'([^/]+)/labels', file).group(1)
@@ -194,7 +208,7 @@ def get_training_labels(df: pd.DataFrame) -> pd.DataFrame:
         tree = KDTree(centroids)
 
         # transfer cell type labels from labeled image to nuclear mask
-        for id, cell in CELL_TYPES.items():
+        for cell_type, id in CELL_TYPES.items():
             # list of coordinates for each labelled cell
             coords = np.argwhere(labels == id) # z, y, x
             if len(coords) == 0:
@@ -210,7 +224,7 @@ def get_training_labels(df: pd.DataFrame) -> pd.DataFrame:
             # map the returned row indices back to nucleus_id
             nearest_nucleus_ids = df['nucleus_id'].to_numpy()[indices[valid]]
             filter = df['nucleus_id'].isin(nearest_nucleus_ids)
-            df['cell_type'][filter] = cell
+            df['cell_type'][filter] = cell_type
 
         training_subset = df[df['cell_type'].notna()]
         training_data = pd.concat([training_data, training_subset])
@@ -223,16 +237,17 @@ def get_training_labels(df: pd.DataFrame) -> pd.DataFrame:
 
 # RF classifier
 
-def load_rf_model(training_data: pd.DataFrame, features: list) -> RandomForestClassifier:
+def load_rf_model(training_data: pd.DataFrame, features: list, pickle_path=None) -> RandomForestClassifier:
     """
     If it exists, loads RF model from pickle. Otherwise, trains an RF on training_data[features].
     """
 
-    pickle_path = Path(OUTPUT_DIR + f'rf_{EXP_ID}.pkl')
+    if pickle_path is None:
+        pickle_path = Path(OUTPUT_DIR + f'rf_{EXP_ID}.pkl')
 
     if pickle_path.is_file():
         with open(pickle_path, 'rb') as file:
-            print(f'\nLoading RF pickle from {pickle_path}')
+            print(f'Loading RF pickle from {pickle_path}')
             rf = pickle.load(file)
     else:
         print('\nTraining RF model')
@@ -247,19 +262,52 @@ def load_rf_model(training_data: pd.DataFrame, features: list) -> RandomForestCl
 
 
 
-def plot_rf_features(rf: RandomForestClassifier, features: list[str]) -> None:
+def plot_rf_features(rf: RandomForestClassifier, features: list[str], training_data: pd.DataFrame) -> None:
     """
-    Plots feature importances (mean decrease gini) from rf.
+    Plots feature importances (gini and permutation) from rf.
     """
+    # first, mean decrease in gini impurity
     importance = rf.feature_importances_
-    forest_importance = pd.Series(importance, index=features).sort_values(ascending=False)[:20]
+    forest_importance = pd.Series(importance, index=rename_cols(features)).sort_values(ascending=False)[:20]
 
-    _, ax = plt.subplots(figsize=(12,6))
+    fig, ax = plt.subplots(figsize=(12,6))
     forest_importance.plot.bar(ax=ax)
     ax.set_title("Feature importances using MDI")
     ax.set_ylabel("Mean decrease in impurity")
-    plt.tight_layout()
-    plt.savefig(f'figs_{EXP_ID}/cell_type_rf_features.png')
+    fig.tight_layout()
+    plt.savefig(f'figs_{EXP_ID}/cell_type_rf_features_gini.png')
+
+    # second, permutation importance (by cell type)
+    # NOTE: running permutation importance on training_data gives us a sense of feature importance,
+    #       but ideally we should use test_data. we could be overfitting / sampling bias.
+    X_train = training_data[features]
+    y_train = training_data['cell_type']
+    cell_types = sorted(CELL_TYPES.keys())
+
+    fig, axs = plt.subplots(3, 1, figsize=(14, 8))
+
+    for ax, cell_type in zip(axs, cell_types):
+        mask = y_train == cell_type
+        results = permutation_importance(
+            rf, X_train[mask], y_train[mask], 
+            scoring='accuracy', n_repeats=5
+        )
+        importance = pd.Series(results.importances_mean, index=rename_cols(features))
+        top_features = importance.sort_values(ascending=False).head(20)
+
+        baseline_acc = rf.score(X_train[mask], y_train[mask])
+        preds = pd.Series(rf.predict(X_train[mask])).value_counts()
+        print(cell_type, 'baseline accuracy:', baseline_acc, 'pred distribution:', dict(preds))
+
+        print(f'{top_features=}'
+
+        sns.barplot(x=top_features.index, y=top_features.values, ax=ax)
+        ax.set_title(cell_type)
+        ax.set_xlabel('Permutation importance')
+        ax.set_ylabel('')
+
+    fig.tight_layout()
+    plt.savefig(f'figs_{EXP_ID}/cell_type_rf_features_permutation.png')
 
 
 def eval_rf_cv(training_data: pd.DataFrame, features: list[str], k=5) -> dict:
@@ -321,10 +369,19 @@ def filter_low_confidence_cells(data: pd.DataFrame, features: list[str], rf: Ran
 
 if __name__ == '__main__':
 
+    # load data
     df = load_data()
     training_data = get_training_labels(df)
+
+    # train classifier
     classifier = load_rf_model(training_data, FEATURES)
-    plot_rf_features(classifier, FEATURES)
+    plot_rf_features(classifier, FEATURES, training_data)
     eval_rf_cv(training_data, FEATURES)
+
+    # assign cell type labels
     df['rf_cell_type'] = classifier.predict(df[FEATURES])
+    plot_pca(df, FEATURES, labels='rf_cell_type')
+
+    # save masks and data
+    generate_cell_type_masks(df)
     df.to_csv(OUTPUT_DIR + 'data.csv')

@@ -8,10 +8,10 @@
             "5": "actin"
         },
         "cell_types": {
-            "1": "ESC",
-            "2": "macrophage"
+            "ESC": 1,
+            "macrophage": 2
         },
-        "subfolders": ["mono1", "co2"],
+        "subfolders": ["mono1", "mono2", "co1", "co2"],
         "label_imgs": [
             "/home/jdweiss1/orcd/scratch/12/co2/labels/E02_cell_type.tif",
             "/home/jdweiss1/orcd/scratch/12/co2/labels/E03_cell_type.tif"
@@ -27,9 +27,9 @@
             "5": "actin"
         },
         "cell_types": {
-            "1": "epithelial",
-            "2": "ESC",
-            "3": "macrophage"
+            "epithelial": 1,
+            "ESC": 2,
+            "macrophage": 3
         },
         "subfolders": ["mono", "co", "tri"],
         "label_imgs": [
@@ -46,9 +46,9 @@
             "5": "actin"
         },
         "cell_types": {
-            "1": "epithelial",
-            "2": "ESC",
-            "3": "macrophage"
+            "epithelial": 1,
+            "ESC": 2,
+            "macrophage": 3
         },
         "subfolders": ["mono", "co", "tri"],
         "label_imgs": [
@@ -65,11 +65,11 @@
             "5": "EpCAM"
         },
         "cell_types": {
-            "1": "epithelial",
-            "2": "ESC",
-            "3": "macrophage"
+            "epithelial": 1,
+            "ESC": 2,
+            "macrophage": 3
         },
-        "subfolders": ["mono", "co", "tri"],
+        "subfolders": ["284-mono", "284-co", "284-tri", "287-mono", "287-co", "287-tri", "304-mono", "304-co", "304-tri"],
         "label_imgs": [
             "/home/jdweiss1/orcd/scratch/15/284-tri/labels/B02_cell_type.tif",
             "/home/jdweiss1/orcd/scratch/15/284-tri/labels/B03_cell_type.tif",

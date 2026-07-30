@@ -10,9 +10,9 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-BATCH_ID=$1
-
 module load miniforge
 mamba activate cellpose2
+
+BATCH_ID=$1
 
 python3 -u process_3dimages.py "$BATCH_ID" --use_gpu

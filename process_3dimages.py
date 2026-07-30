@@ -1,5 +1,4 @@
 import json
-import re
 import sys
 import numpy as np
 import pandas as pd
@@ -25,12 +24,12 @@ DIAMETER_UM = p['diameter_um']
 Z_STEP_UM = p['z_step_um']
 ANISOTROPY = p['anisotropy']
 CELLPROB_THRESHOLD = p['cellprob_threshold']
+ACTIN_CHANNEL = p['actin_channel']
 
 N_CHANNELS = 5
 NUCLEAR_CHANNEL = 1
 USE_GPU = True
 MAX_WORKERS = 1
-
 
 # --- Discover wells ---
 wells_found = set()
@@ -52,6 +51,7 @@ model = build_model(
     diameter=(DIAMETER_UM / (XY_PIXEL_UM * SCALE)),
     anisotropy=ANISOTROPY,
     cellprob_threshold=CELLPROB_THRESHOLD,
+    scale=SCALE,
     use_gpu=USE_GPU
 )
 
@@ -60,9 +60,11 @@ def process_well(well):
     nuclear_masks, cytoplasm_masks = segment_nuclei_3d(
         well_id=well,
         base_path=str(BASE_PATH),
-        scale=SCALE,
         nuclear_channel=NUCLEAR_CHANNEL,
-        model=model
+        model=model,
+        xy_pixel_um=XY_PIXEL_UM,
+        z_step_um=Z_STEP_UM,
+        actin_channel=ACTIN_CHANNEL
     )
 
     measurements = calculate_metrics(
@@ -75,7 +77,7 @@ def process_well(well):
         xy_pixel_um=XY_PIXEL_UM
     )
 
-    measurements['well_id'] = f'{well}'
+    measurements['well_id'] = well
     return well, measurements
 
 

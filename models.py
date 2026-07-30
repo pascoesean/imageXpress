@@ -1,5 +1,6 @@
 import numpy as np
 from cellpose import models
+from skimage.transform import downscale_local_mean, resize
 
 
 class SegmentationModel:
@@ -12,10 +13,11 @@ class SegmentationModel:
       - Cellpose4Model ('cellpose4')
     """
 
-    def __init__(self, diameter: float, anisotropy: float, cellprob_threshold: float, use_gpu: bool = True):
+    def __init__(self, diameter: float, anisotropy: float, cellprob_threshold: float, scale: float, use_gpu: bool = True):
         self.diameter = diameter
         self.anisotropy = anisotropy
         self.cellprob_threshold = cellprob_threshold
+        self.scale = scale
         self.use_gpu = use_gpu
         self.model = None
         self.load()
@@ -39,6 +41,16 @@ class Cellpose2Model(SegmentationModel):
         print(f'[Cellpose2Model] loaded (gpu={self.use_gpu})')
 
     def eval(self, stack: np.ndarray) -> np.ndarray:
+        """
+        Wrapper for CellposeModel.eval
+        """
+        orig_shape = stack.shape
+
+        if self.scale != 1:
+            # downsample xy for faster inference
+            stack = downscale_local_mean(stack, (1, self.scale, self.scale)).astype(np.float32)
+            print(f'  downsampled stack shape: {stack.shape}', flush=True)
+
         masks, _, _, _ = self.model.eval(
             stack,
             do_3D=True,
@@ -48,6 +60,18 @@ class Cellpose2Model(SegmentationModel):
             channels=[0, 0], # gray channel
             z_axis=0,
         )
+
+        # restore original (z, y, x) dims in one nearest-neighbor resize
+        masks = resize(
+            masks.astype(np.float32),
+            orig_shape,
+            order=0, # maintain nearest labels
+            anti_aliasing=False,
+            preserve_range=True,
+        ).astype(np.uint16)
+
+        del stack
+
         return masks
 
 
@@ -58,14 +82,14 @@ class Cellpose4Model(SegmentationModel):
         print(f'[Cellpose4Model] loaded (gpu={self.use_gpu})')
 
     def eval(self, stack: np.ndarray) -> np.ndarray:
-        masks, _, _, _ = self.model.eval(
+        masks, _, _ = self.model.eval(
             stack,
-            do_3D=True,
+            do_3D=False,
+            stitch_threshold=0.25,
             diameter=self.diameter,
             anisotropy=self.anisotropy,
             cellprob_threshold=self.cellprob_threshold,
             z_axis=0,
-            batch_size=4,
         )
         return masks
 

@@ -6,10 +6,11 @@ import time
 import gc
 import torch
 from scipy import ndimage
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, gaussian_filter
 from scipy.spatial import KDTree
 from skimage.measure import regionprops, marching_cubes, mesh_surface_area
-from skimage.transform import downscale_local_mean, resize
+from skimage.segmentation import watershed
+from skimage.filters import threshold_otsu
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -42,48 +43,90 @@ def load_channel_stack(base_path, well_id, channel_index, dtype=None):
 
 
 
-def segment_nuclei_3d(well_id, base_path, nuclear_channel, model,
-                      dilation_iterations=10, scale=1, save_masks=True):
-
+def segment_nuclei_3d(well_id, base_path, nuclear_channel, model, xy_pixel_um, z_step_um,
+                      actin_channel=None, cytoplasm_um=5, save_masks=True):
     t_total = time.time()
 
-    # --- Load nuclear channel ---
+    # load nuclear channel
     t = time.time()
     nuclear_stack = load_channel_stack(base_path, well_id, nuclear_channel, dtype=np.float32)
     print(f'  nuclear channel loaded with shape {nuclear_stack.shape}', flush=True)
     _elapsed(t, 'image loading')
 
-    # --- Downsample XY for faster inference ---
+    # segment nuclei w/ Cellpose
+    print(f'Segmenting nuclei for {well_id}...', flush=True)
     t = time.time()
-    print(f'Segmenting nuclei for {well_id} (scale={scale})...', flush=True)
     print(f'  GPU memory before eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
-
-    nuclear_stack_ds = downscale_local_mean(nuclear_stack, (1, scale, scale)).astype(np.float32)
-    print(f'  downsampled stack shape: {nuclear_stack_ds.shape}', flush=True)
-
-    masks_ds = model.eval(nuclear_stack_ds)
-
+    nuclear_masks = model.eval(nuclear_stack)
     print(f'  GPU memory after eval: {torch.cuda.memory_allocated()/1e9:.2f} GB', flush=True)
-
-    # --- Scale masks back to original XY resolution ---
-    nuclear_masks = resize(
-        masks_ds.astype(np.float32),
-        nuclear_stack.shape,
-        order=0,               # nearest-neighbor preserves label IDs
-        anti_aliasing=False,
-        preserve_range=True,
-    ).astype(np.uint16)
-
     print(f'  {nuclear_masks.max()} nuclei detected.', flush=True)
     _elapsed(t, 'cellpose nuclear segmentation')
-    del nuclear_stack, nuclear_stack_ds, masks_ds
+
+    del nuclear_stack
     gc.collect()
 
-    # --- Build cytoplasm masks by single-pass dilation ---
+    # LOAD NUCLEAR MASKS FROM DISK (IF PRE-COMPUTED)
+    #nuclear_masks = tifffile.imread(base_path + f'/masks/{well_id}_nuclear_masks.tif')
+
     print(f'Building cytoplasm masks for {well_id}...', flush=True)
     t = time.time()
+
+    if actin_channel is not None:
+        # watershed on actin --> cytoplasm mask
+        actin_stack = load_channel_stack(base_path, well_id, actin_channel, dtype=np.float32)
+        cytoplasm_masks = segment_actin(actin_stack, nuclear_masks, base_path, well_id)
+
+    else:
+        # binary dilation -> cytoplasm mask (super rough estimate)
+        cytoplasm_masks = dilate_nuclear_masks(nuclear_masks, cytoplasm_um, xy_pixel_um, z_step_um)
+
+    _elapsed(t, 'cytoplasm masks')
+
+    # --- Save masks ---
+    if save_masks:
+        t = time.time()
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
+        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
+        _elapsed(t, 'saving masks')
+
+    _elapsed(t_total, 'TOTAL segment_nuclei_3d')
+    return nuclear_masks, cytoplasm_masks
+
+
+def segment_actin(actin_stack, nuclear_masks, base_path, well_id):
+    # watershed seeds = centroids of nuclear masks
+    props = regionprops(nuclear_masks)
+    centroids = np.zeros_like(nuclear_masks)
+    for p in props:
+        coords = tuple(np.round(p.centroid).astype(int))
+        centroids[coords] = p.label
+
+    # create a mask to restrict segmentation
+    p1, p99 = np.percentile(actin_stack, [1, 99])
+    actin_norm = np.clip((actin_stack - p1) / (p99 - p1 + 1e-8), 0, 1)
+    actin_DoG = gaussian_filter(actin_norm, sigma=(0, 1, 1)) - gaussian_filter(actin_norm, sigma=(0, 100, 100))
+    tifffile.imwrite(base_path + f'/masks/{well_id}_actin_DoG.tif', actin_DoG)
+    actin_thresh = threshold_otsu(actin_DoG)
+    actin_mask = actin_DoG > actin_thresh
+    tifffile.imwrite(base_path + f'/masks/{well_id}_actin_mask.tif', actin_mask)
+
+    # watershed on -actin_img so that centroids = local minima
+    cytoplasm_masks = watershed(-actin_stack, markers=centroids, mask=actin_mask)
+    # as a safety check, each cytoplasm mask should 100% include its own nucleus
+    cytoplasm_masks = np.where(nuclear_masks > 0, nuclear_masks, cytoplasm_masks)
+
+    return cytoplasm_masks
+
+
+def dilate_nuclear_masks(nuclear_masks, cytoplasm_um, xy_pixel_um, z_step_um):
+    # binary dilation -> cytoplasm mask (super rough estimate)
     foreground = nuclear_masks > 0
-    struct = np.ones((1, dilation_iterations * 2 + 1, dilation_iterations * 2 + 1), dtype=bool)
+    xy_dilation = int(round(cytoplasm_um / xy_pixel_um)) # scale dilation size from um to pixels
+    z_dilation = int(round(cytoplasm_um / z_step_um)) # scale dilation size from um to pixels
+    struct = np.ones(
+        (z_dilation + 1, xy_dilation * 2 + 1, xy_dilation * 2 + 1),
+        dtype=bool
+    )
     dilated_fg = binary_dilation(foreground, structure=struct)
 
     # propagate nearest nucleus label onto the dilated ring
@@ -99,25 +142,14 @@ def segment_nuclei_3d(well_id, base_path, nuclear_channel, model,
         0,
     ).astype(nuclear_masks.dtype)
 
-    _elapsed(t, 'cytoplasm dilation')
-
-    # --- Save masks ---
-    if save_masks:
-        t = time.time()
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_nuclear_masks.tif', nuclear_masks.astype(np.uint16))
-        tifffile.imwrite(f'{base_path}/masks/{well_id}_cytoplasm_masks.tif', cytoplasm_masks.astype(np.uint16))
-        _elapsed(t, 'saving masks')
-
-    _elapsed(t_total, 'TOTAL segment_nuclei_3d')
-    return nuclear_masks, cytoplasm_masks
-
+    return cytoplasm_masks
 
 
 def calculate_metrics(nuclear_masks, cytoplasm_masks, base_path, n_channels,
                       well_id, z_step_um, xy_pixel_um):
 
     intensity_df = measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels, well_id, z_step_um, xy_pixel_um)
-    morpho_df = measure_morphology(nuclear_masks, well_id, z_step_um, xy_pixel_um)
+    morpho_df = measure_morphology(nuclear_masks, cytoplasm_masks, well_id, z_step_um, xy_pixel_um)
     df = intensity_df.merge(morpho_df, on='nucleus_id')
 
     return df
@@ -158,8 +190,8 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
         print(f'  loaded {channel_name} with shape {stack.shape}', flush=True)
 
         # call helper function to efficiently get all stats
-        nuc_mean, nuc_max, nuc_std = _measure_channel(stack, nuclear_masks, nucleus_ids)
-        cyt_mean, cyt_max, cyt_std = _measure_channel(stack, cytoplasm_masks, nucleus_ids)
+        nuc_mean, nuc_max, nuc_std = measure_channel(stack, nuclear_masks, nucleus_ids)
+        cyt_mean, cyt_max, cyt_std = measure_channel(stack, cytoplasm_masks, nucleus_ids)
 
         df[f'{channel_name}_nuclear_mean']         = nuc_mean
         df[f'{channel_name}_nuclear_max']          = nuc_max
@@ -171,9 +203,7 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
         df[f'{channel_name}_cytoplasm_std']        = cyt_std
         df[f'{channel_name}_cytoplasm_integrated'] = cyt_mean * cyt_vols
 
-        df[f'{channel_name}_nc_ratio'] = (
-            (nuc_mean * nuc_vols) / (cyt_mean * cyt_vols + 1e-9)
-        )
+        df[f'{channel_name}_nc_ratio']             = nuc_mean / (cyt_mean + 1e-9)
 
         del stack
         gc.collect()
@@ -187,7 +217,7 @@ def measure_intensity(nuclear_masks, cytoplasm_masks, base_path, n_channels,
     return df
 
 
-def _measure_channel(stack, mask, nucleus_ids):
+def measure_channel(stack, mask, nucleus_ids):
     """
     Helper function. Calculates intensity metrics in a single pass (groups by label).
     """
@@ -220,11 +250,11 @@ def _measure_channel(stack, mask, nucleus_ids):
 
 
 
-def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
+def measure_morphology(nuclear_masks, cytoplasm_masks, well_id, z_step_um, xy_pixel_um, radius_um=50):
     """
     Helper function. Calculates morphology metrics in a single pass (groups by label).
     """
-    nucleus_ids = np.unique(mask)
+    nucleus_ids = np.unique(nuclear_masks)
     nucleus_ids = nucleus_ids[nucleus_ids != 0]
     voxel_volume_um3 = z_step_um * xy_pixel_um * xy_pixel_um
 
@@ -232,11 +262,9 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
 
     t_total = time.time()
 
-    props = regionprops(mask, spacing=(z_step_um, xy_pixel_um, xy_pixel_um)) # note: 3D mask
-
-    # regionprops returns one object per label, in label order but not guaranteed
-    # to match nucleus_ids ordering — so index by label explicitly
-    prop_by_label = {p.label: p for p in props}
+    # NUCLEAR STATS
+    nuclear_props = regionprops(nuclear_masks, spacing=(z_step_um, xy_pixel_um, xy_pixel_um)) # note: 3D mask
+    prop_by_label = {p.label: p for p in nuclear_props}
 
     centroids = np.array([prop_by_label[i].centroid for i in nucleus_ids])
     df[["centroid_z_um", "centroid_y_um", "centroid_x_um"]] = centroids
@@ -246,22 +274,6 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     df['centroid_y'] = df['centroid_y_um'] / xy_pixel_um
     df['centroid_z'] = df['centroid_z_um'] / z_step_um
 
-    # only calculate axis lengths for non-degenerate (big) cells
-    def is_degenerate(i, z_thresh=3, min_voxels=20):
-        prop = prop_by_label[i]
-        z_extent = prop.bbox[3] - prop.bbox[0] # z_max - z_min
-        return z_extent <= z_thresh or prop.num_pixels < min_voxels
-
-    try:
-        df['axis_major_length'] = np.array([prop_by_label[i].axis_major_length if (not is_degenerate(i)) else np.nan for i in nucleus_ids])
-        df['axis_minor_length'] = np.array([prop_by_label[i].axis_minor_length if (not is_degenerate(i)) else np.nan for i in nucleus_ids])
-    except ValueError:
-        df['axis_major_length'] = np.nan
-        df['axis_minor_length'] = np.nan
-
-    _elapsed(t_total, 'regionprops measurements')
-
-    t = time.time()
     # use a kd-tree to calculate local density metrics
     kdtree = KDTree(centroids)
 
@@ -277,11 +289,28 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
     neighbor_idx = kdtree.query_ball_point(centroids, radius_um)
     df[f'num_neighbors_within_{int(radius_um)}_um'] = [len(nb) - 1 for nb in neighbor_idx]
 
-    _elapsed(t, 'local density measurements')
+    cytoplasm_props = regionprops(cytoplasm_masks, spacing=(z_step_um, xy_pixel_um, xy_pixel_um))
+    prop_by_label = {p.label: p for p in cytoplasm_props}
+
+    df['volume'] = np.array([prop_by_label[i].area for i in nucleus_ids])
+
+    def safe_axis_length(p, attr):
+        """skimage computes this via sqrt of inertia-tensor eigenvalues; near-degenerate
+        3D regions can produce a slightly negative eigenvalue from float error, raising
+        'ValueError: math domain error'. Catch and fall back to NaN."""
+        try:
+            return getattr(p, attr)
+        except ValueError:
+            return np.nan
+
+    df['axis_major_length'] = np.array([safe_axis_length(prop_by_label[i], 'axis_major_length') for i in nucleus_ids])
+    df['axis_minor_length'] = np.array([safe_axis_length(prop_by_label[i], 'axis_minor_length') for i in nucleus_ids])
+
+    df['aspect_ratio'] = df['axis_major_length'] / df['axis_minor_length']
 
     # run marching cubes algorithm to generate 3D model of each nucleus
+    surface_areas = []
     sphericities = []
-    t = time.time()
 
     for nid in nucleus_ids:
         # first, reduce the search space to the nucleus' bounding box (from regionprops)
@@ -289,7 +318,7 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
         slices = p.slice
 
         # create a binary mask for the specific nucleus
-        binary_mask = (mask[slices] == nid)
+        binary_mask = (cytoplasm_masks[slices] == nid)
         # pad by 1 pixel so that mesh is closed on ends
         binary_mask = np.pad(binary_mask, pad_width=1, mode='constant', constant_values=0)
 
@@ -302,12 +331,14 @@ def measure_morphology(mask, well_id, z_step_um, xy_pixel_um, radius_um=50):
             sphericity = (np.pi ** (1/3) * (6 * volume) ** (2/3)) / surface_area
         except Exception:
             # marching_cubes can fail for very small/irregular volumes
+            surface_area = np.nan
             sphericity = np.nan
 
+        surface_areas.append(surface_area)
         sphericities.append(sphericity)
 
+    df['surface_area'] = np.array(surface_areas)
     df['sphericity'] = np.array(sphericities)
-    _elapsed(t, 'marching_cubes measurements')
 
     print(f'MEASUREMENTS FOR {well_id}:', flush=True)
     print(df.head(), flush=True)
